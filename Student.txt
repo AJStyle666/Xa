@@ -1,0 +1,140 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.19;
+
+/*
+ Students contract
+ - Demonstrates: struct, dynamic array, mapping, receive() and fallback()
+ - Anyone can add a student (owner-only delete/update optionally).
+ - Ether can be deposited to a student's internal "balance" using depositToStudent().
+ - Contract accept plain ETH transfers via receive() (logging) and fallback() (logging).
+*/
+
+contract Students {
+    // owner (deployer) for administrative actions
+    address public owner;
+
+    constructor() {
+        owner = msg.sender;
+    }
+
+    // student structure
+    struct Student {
+        uint256 id;
+        string name;
+        uint8 age;
+        uint256 balance; // wei balance assigned to this student inside contract
+    }
+
+    // dynamic array of students and an id => index mapping for fast lookup
+    Student[] public students;
+    mapping(uint256 => uint256) private idToIndex; // maps student id -> index+1 (0 means not present)
+
+    // events
+    event StudentAdded(uint256 indexed id, string name, uint8 age);
+    event StudentUpdated(uint256 indexed id, string name, uint8 age);
+    event StudentDeleted(uint256 indexed id);
+    event DepositedToStudent(uint256 indexed id, address from, uint256 amount);
+    event ReceivedPlainEther(address from, uint256 amount);
+    event FallbackCalled(address from, uint256 value, bytes data);
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only owner");
+        _;
+    }
+
+    // add a student (anyone can call for demo; make onlyOwner if required)
+    function addStudent(uint256 _id, string memory _name, uint8 _age) public {
+        require(_id != 0, "id 0 invalid");
+        require(idToIndex[_id] == 0, "student exists");
+        students.push(Student({id: _id, name: _name, age: _age, balance: 0}));
+        idToIndex[_id] = students.length; // store index+1
+        emit StudentAdded(_id, _name, _age);
+    }
+
+    // get student count
+    function getStudentCount() external view returns (uint256) {
+        return students.length;
+    }
+
+    // read student by id
+    function getStudent(uint256 _id) public view returns (uint256, string memory, uint8, uint256) {
+        uint256 idx = idToIndex[_id];
+        require(idx != 0, "not found");
+        Student storage s = students[idx - 1];
+        return (s.id, s.name, s.age, s.balance);
+    }
+
+    // update student (owner only)
+    function updateStudent(uint256 _id, string memory _name, uint8 _age) external onlyOwner {
+        uint256 idx = idToIndex[_id];
+        require(idx != 0, "not found");
+        Student storage s = students[idx - 1];
+        s.name = _name;
+        s.age = _age;
+        emit StudentUpdated(_id, _name, _age);
+    }
+
+    // delete student (owner only)
+    function deleteStudent(uint256 _id) external onlyOwner {
+        uint256 idx = idToIndex[_id];
+        require(idx != 0, "not found");
+        uint256 index = idx - 1;
+        // swap-delete pattern
+        uint256 lastIndex = students.length - 1;
+        if (index != lastIndex) {
+            Student storage lastStudent = students[lastIndex];
+            students[index] = lastStudent;
+            idToIndex[lastStudent.id] = index + 1;
+        }
+        students.pop();
+        delete idToIndex[_id];
+        emit StudentDeleted(_id);
+    }
+
+    // deposit ETH to a student (payable). Caller sends ETH along with the call.
+    function depositToStudent(uint256 _id) external payable {
+        require(msg.value > 0, "send some ETH");
+        uint256 idx = idToIndex[_id];
+        require(idx != 0, "student not found");
+        Student storage s = students[idx - 1];
+        s.balance += msg.value;
+        emit DepositedToStudent(_id, msg.sender, msg.value);
+    }
+
+    // view student's internal stored balance
+    function getStudentBalance(uint256 _id) external view returns (uint256) {
+        uint256 idx = idToIndex[_id];
+        require(idx != 0, "student not found");
+        return students[idx - 1].balance;
+    }
+
+    // owner can withdraw a student's stored balance to student's address (or owner)
+    function withdrawStudentBalance(uint256 _id, address payable _to) external onlyOwner {
+        uint256 idx = idToIndex[_id];
+        require(idx != 0, "student not found");
+        Student storage s = students[idx - 1];
+        uint256 amt = s.balance;
+        require(amt > 0, "no balance");
+        s.balance = 0;
+        (bool sent, ) = _to.call{value: amt}("");
+        require(sent, "transfer failed");
+    }
+
+    // get contract total balance
+    function getContractBalance() external view returns (uint256) {
+        return address(this).balance;
+    }
+
+    /* 
+      receive(): called when tx has empty calldata (plain ETH transfer). Must be payable to accept ETH.
+      fallback(): called when calldata doesn't match any function. Mark payable if you want it to accept ETH.
+      Docs: fallback/receive behavior described in Solidity docs (useful for your report).
+    */
+    receive() external payable {
+        emit ReceivedPlainEther(msg.sender, msg.value);
+    }
+
+    fallback() external payable {
+        emit FallbackCalled(msg.sender, msg.value, msg.data);
+    }
+}
